@@ -36,7 +36,7 @@ async function getSession(sid) {
     }
     const browser = await launchBrowser();
     const page    = await browser.newPage();
-    await page.setViewport({ width: 1366, height: 768, deviceScaleFactor: 1 });
+    await page.setViewport({ width: 1280, height: 720, deviceScaleFactor: 1 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.evaluateOnNewDocument(() => {
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -60,7 +60,12 @@ async function closeSession(sid) {
 }
 
 async function snap(page) {
-    return page.screenshot({ type: 'jpeg', quality: 85, clip: { x: 0, y: 0, width: 1366, height: 768 } });
+    return page.screenshot({ type: 'jpeg', quality: 65,
+        clip: { x: 0, y: 0, width: 1280, height: 720 } });
+}
+
+async function isBrowserAlive(s) {
+    try { await s.page.evaluate(() => true); return true; } catch { return false; }
 }
 
 async function smartWait(page, ms = 3000) {
@@ -72,7 +77,7 @@ async function smartWait(page, ms = 3000) {
     } catch { await new Promise(r => setTimeout(r, 500)); }
 }
 
-app.get('/', (req, res) => res.json({ status: 'ok', version: '3.3', sessions: sessions.size }));
+app.get('/', (req, res) => res.json({ status: 'ok', version: '3.4', sessions: sessions.size }));
 
 app.get('/navigate', async (req, res) => {
     const { sid = 'default', url } = req.query;
@@ -82,20 +87,11 @@ app.get('/navigate', async (req, res) => {
         resetTimer(sid);
         let navUrl = url;
         if (!navUrl.startsWith('http')) navUrl = 'https://' + navUrl;
-
         const isHeavyApp = /whatsapp|gmail|outlook|teams|slack/i.test(navUrl);
-
         try {
-            await s.page.goto(navUrl, {
-                waitUntil: isHeavyApp ? 'domcontentloaded' : 'networkidle2',
-                timeout: 30000
-            });
-        } catch {
-            console.log('navigate timeout, tirando screenshot do estado atual');
-        }
-
+            await s.page.goto(navUrl, { waitUntil: isHeavyApp ? 'domcontentloaded' : 'networkidle2', timeout: 30000 });
+        } catch { console.log('navigate timeout, screenshot do estado atual'); }
         await smartWait(s.page, isHeavyApp ? 5000 : 2000);
-
         s.url = s.page.url();
         const title = await s.page.title().catch(() => '');
         const img   = await snap(s.page);
@@ -110,7 +106,7 @@ app.get('/screenshot', async (req, res) => {
         if (url) {
             const browser = await launchBrowser();
             const page    = await browser.newPage();
-            await page.setViewport({ width: 1366, height: 768 });
+            await page.setViewport({ width: 1280, height: 720 });
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36');
             await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
             await smartWait(page, 2000);
@@ -119,8 +115,13 @@ app.get('/screenshot', async (req, res) => {
             res.set({ 'Content-Type': 'image/png', 'Access-Control-Allow-Origin': '*' });
             return res.send(shot);
         }
-        const s   = await getSession(sid);
+        const s = await getSession(sid);
         resetTimer(sid);
+        const alive = await isBrowserAlive(s);
+        if (!alive) {
+            sessions.delete(sid);
+            return res.status(503).json({ error: 'session_crashed', message: 'Browser crashou por falta de memória.' });
+        }
         const img = await snap(s.page);
         res.set({ 'Content-Type': 'image/jpeg', 'Access-Control-Allow-Origin': '*' });
         res.send(img);
@@ -192,9 +193,7 @@ app.post('/key', async (req, res) => {
             await s.page.keyboard.down(parts[0]);
             await s.page.keyboard.press(parts[1]);
             await s.page.keyboard.up(parts[0]);
-        } else {
-            await s.page.keyboard.press(key);
-        }
+        } else { await s.page.keyboard.press(key); }
         await smartWait(s.page, 1500);
         s.url = s.page.url();
         const img = await snap(s.page);
@@ -229,4 +228,4 @@ app.post('/forward', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`Copia Autenticada API v3.3 porta ${PORT}`));
+app.listen(PORT, () => console.log(`Copia Autenticada API v3.4 porta ${PORT}`));
