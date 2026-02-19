@@ -50,7 +50,7 @@ async function closeSession(sid) {
 }
 
 async function snap(page) {
-    return page.screenshot({ type: 'jpeg', quality: 85,
+    return page.screenshot({ type: 'jpeg', quality: 80,
         clip: { x: 0, y: 0, width: 1366, height: 768 } });
 }
 
@@ -67,7 +67,7 @@ app.get('/navigate', async (req, res) => {
         let navUrl = url;
         if (!navUrl.startsWith('http')) navUrl = 'https://' + navUrl;
         await s.page.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 1500));
         s.url = s.page.url();
         const title = await s.page.title().catch(() => '');
         const img   = await snap(s.page);
@@ -94,7 +94,7 @@ app.get('/screenshot', async (req, res) => {
             await page.setViewport({ width: 1366, height: 768 });
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36');
             await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-            await new Promise(r => setTimeout(r, 2000));
+            await new Promise(r => setTimeout(r, 1500));
             const shot = await page.screenshot({ type: 'png' });
             await browser.close();
             res.set({ 'Content-Type': 'image/png', 'Access-Control-Allow-Origin': '*' });
@@ -116,7 +116,7 @@ app.post('/click', async (req, res) => {
         const s = await getSession(sid);
         resetTimer(sid);
         await s.page.mouse.click(x, y);
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 800));
         s.url = s.page.url();
         const title = await s.page.title().catch(() => '');
         const img   = await snap(s.page);
@@ -137,7 +137,7 @@ app.post('/scroll', async (req, res) => {
         const s = await getSession(sid);
         resetTimer(sid);
         await s.page.evaluate((dy) => window.scrollBy(0, dy), deltaY);
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 300));
         const img = await snap(s.page);
         res.set({ 'Content-Type': 'image/jpeg', 'Access-Control-Allow-Origin': '*' });
         res.send(img);
@@ -149,8 +149,8 @@ app.post('/type', async (req, res) => {
     try {
         const s = await getSession(sid);
         resetTimer(sid);
-        await s.page.keyboard.type(text, { delay: 50 });
-        await new Promise(r => setTimeout(r, 800));
+        await s.page.keyboard.type(text, { delay: 30 });
+        await new Promise(r => setTimeout(r, 600));
         const img = await snap(s.page);
         res.set({ 'Content-Type': 'image/jpeg', 'Access-Control-Allow-Origin': '*' });
         res.send(img);
@@ -172,7 +172,7 @@ app.post('/key', async (req, res) => {
         } else {
             await s.page.keyboard.press(key);
         }
-        await new Promise(r => setTimeout(r, 1200));
+        await new Promise(r => setTimeout(r, 800));
         s.url = s.page.url();
         const img = await snap(s.page);
         res.set({
@@ -190,7 +190,7 @@ app.post('/back', async (req, res) => {
     try {
         const s = await getSession(sid);
         await s.page.goBack({ waitUntil: 'domcontentloaded', timeout: 15000 });
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 800));
         s.url = s.page.url();
         const img = await snap(s.page);
         res.set({
@@ -208,7 +208,7 @@ app.post('/forward', async (req, res) => {
     try {
         const s = await getSession(sid);
         await s.page.goForward({ waitUntil: 'domcontentloaded', timeout: 15000 });
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 800));
         s.url = s.page.url();
         const img = await snap(s.page);
         res.set({
