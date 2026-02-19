@@ -13,11 +13,13 @@ const sessions = new Map();
 async function launchBrowser() {
     return puppeteer.launch({
         headless: 'new',
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
         args: [
             '--no-sandbox', '--disable-setuid-sandbox',
             '--disable-dev-shm-usage', '--disable-gpu',
             '--no-first-run', '--no-zygote', '--single-process',
-            '--disable-features=VizDisplayCompositor'
+            '--disable-features=VizDisplayCompositor',
+            '--disable-blink-features=AutomationControlled'
         ]
     });
 }
@@ -31,9 +33,12 @@ async function getSession(sid) {
     const page    = await browser.newPage();
     await page.setViewport({ width: 1366, height: 768, deviceScaleFactor: 1 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    });
     const session = { browser, page, url: '' };
     sessions.set(sid, session);
-    session.timer = setTimeout(() => closeSession(sid), 10 * 60 * 1000);
+    session.timer = setTimeout(() => closeSession(sid), 15 * 60 * 1000);
     return session;
 }
 
@@ -41,7 +46,7 @@ function resetTimer(sid) {
     const s = sessions.get(sid);
     if (!s) return;
     clearTimeout(s.timer);
-    s.timer = setTimeout(() => closeSession(sid), 10 * 60 * 1000);
+    s.timer = setTimeout(() => closeSession(sid), 15 * 60 * 1000);
 }
 
 async function closeSession(sid) {
@@ -50,13 +55,19 @@ async function closeSession(sid) {
 }
 
 async function snap(page) {
-    return page.screenshot({ type: 'jpeg', quality: 80,
-        clip: { x: 0, y: 0, width: 1366, height: 768 } });
+    return page.screenshot({ type: 'jpeg', quality: 85, clip: { x: 0, y: 0, width: 1366, height: 768 } });
 }
 
-app.get('/', (req, res) => {
-    res.json({ status: 'ok', version: '3.1', sessions: sessions.size });
-});
+async function smartWait(page, ms = 3000) {
+    try {
+        await Promise.race([
+            page.waitForNetworkIdle({ idleTime: 800, timeout: ms }),
+            new Promise(r => setTimeout(r, ms))
+        ]);
+    } catch { await new Promise(r => setTimeout(r, 500)); }
+}
+
+app.get('/', (req, res) => res.json({ status: 'ok', version: '3.2', sessions: sessions.size }));
 
 app.get('/navigate', async (req, res) => {
     const { sid = 'default', url } = req.query;
@@ -66,23 +77,19 @@ app.get('/navigate', async (req, res) => {
         resetTimer(sid);
         let navUrl = url;
         if (!navUrl.startsWith('http')) navUrl = 'https://' + navUrl;
-        await s.page.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await new Promise(r => setTimeout(r, 1500));
+        try {
+            await s.page.goto(navUrl, { waitUntil: 'networkidle2', timeout: 25000 });
+        } catch {
+            await s.page.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await smartWait(s.page, 3000);
+        }
+        await smartWait(s.page, 2000);
         s.url = s.page.url();
         const title = await s.page.title().catch(() => '');
         const img   = await snap(s.page);
-        res.set({
-            'Content-Type': 'image/jpeg',
-            'X-Page-Url': encodeURIComponent(s.url),
-            'X-Page-Title': encodeURIComponent(title),
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Expose-Headers': 'X-Page-Url, X-Page-Title'
-        });
+        res.set({ 'Content-Type': 'image/jpeg', 'X-Page-Url': encodeURIComponent(s.url), 'X-Page-Title': encodeURIComponent(title), 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Page-Url, X-Page-Title' });
         res.send(img);
-    } catch (err) {
-        console.error('/navigate error:', err.message);
-        res.status(500).json({ error: err.message });
-    }
+    } catch (err) { console.error('/navigate error:', err.message); res.status(500).json({ error: err.message }); }
 });
 
 app.get('/screenshot', async (req, res) => {
@@ -94,7 +101,7 @@ app.get('/screenshot', async (req, res) => {
             await page.setViewport({ width: 1366, height: 768 });
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36');
             await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-            await new Promise(r => setTimeout(r, 1500));
+            await smartWait(page, 2000);
             const shot = await page.screenshot({ type: 'png' });
             await browser.close();
             res.set({ 'Content-Type': 'image/png', 'Access-Control-Allow-Origin': '*' });
@@ -105,9 +112,21 @@ app.get('/screenshot', async (req, res) => {
         const img = await snap(s.page);
         res.set({ 'Content-Type': 'image/jpeg', 'Access-Control-Allow-Origin': '*' });
         res.send(img);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/refresh', async (req, res) => {
+    const { sid = 'default', wait = 3000 } = req.query;
+    try {
+        const s = await getSession(sid);
+        resetTimer(sid);
+        await smartWait(s.page, parseInt(wait));
+        s.url = s.page.url();
+        const title = await s.page.title().catch(() => '');
+        const img   = await snap(s.page);
+        res.set({ 'Content-Type': 'image/jpeg', 'X-Page-Url': encodeURIComponent(s.url), 'X-Page-Title': encodeURIComponent(title), 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Page-Url, X-Page-Title' });
+        res.send(img);
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/click', async (req, res) => {
@@ -116,17 +135,11 @@ app.post('/click', async (req, res) => {
         const s = await getSession(sid);
         resetTimer(sid);
         await s.page.mouse.click(x, y);
-        await new Promise(r => setTimeout(r, 800));
+        await smartWait(s.page, 1500);
         s.url = s.page.url();
         const title = await s.page.title().catch(() => '');
         const img   = await snap(s.page);
-        res.set({
-            'Content-Type': 'image/jpeg',
-            'X-Page-Url': encodeURIComponent(s.url),
-            'X-Page-Title': encodeURIComponent(title),
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Expose-Headers': 'X-Page-Url, X-Page-Title'
-        });
+        res.set({ 'Content-Type': 'image/jpeg', 'X-Page-Url': encodeURIComponent(s.url), 'X-Page-Title': encodeURIComponent(title), 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Page-Url, X-Page-Title' });
         res.send(img);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -137,7 +150,7 @@ app.post('/scroll', async (req, res) => {
         const s = await getSession(sid);
         resetTimer(sid);
         await s.page.evaluate((dy) => window.scrollBy(0, dy), deltaY);
-        await new Promise(r => setTimeout(r, 300));
+        await new Promise(r => setTimeout(r, 400));
         const img = await snap(s.page);
         res.set({ 'Content-Type': 'image/jpeg', 'Access-Control-Allow-Origin': '*' });
         res.send(img);
@@ -149,7 +162,7 @@ app.post('/type', async (req, res) => {
     try {
         const s = await getSession(sid);
         resetTimer(sid);
-        await s.page.keyboard.type(text, { delay: 30 });
+        await s.page.keyboard.type(text, { delay: 40 });
         await new Promise(r => setTimeout(r, 600));
         const img = await snap(s.page);
         res.set({ 'Content-Type': 'image/jpeg', 'Access-Control-Allow-Origin': '*' });
@@ -164,23 +177,16 @@ app.post('/key', async (req, res) => {
         resetTimer(sid);
         if (key.includes('+')) {
             const parts = key.split('+');
-            const mod   = parts[0];
-            const k     = parts[1];
-            await s.page.keyboard.down(mod);
-            await s.page.keyboard.press(k);
-            await s.page.keyboard.up(mod);
+            await s.page.keyboard.down(parts[0]);
+            await s.page.keyboard.press(parts[1]);
+            await s.page.keyboard.up(parts[0]);
         } else {
             await s.page.keyboard.press(key);
         }
-        await new Promise(r => setTimeout(r, 800));
+        await smartWait(s.page, 1500);
         s.url = s.page.url();
         const img = await snap(s.page);
-        res.set({
-            'Content-Type': 'image/jpeg',
-            'X-Page-Url': encodeURIComponent(s.url),
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Expose-Headers': 'X-Page-Url'
-        });
+        res.set({ 'Content-Type': 'image/jpeg', 'X-Page-Url': encodeURIComponent(s.url), 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Page-Url' });
         res.send(img);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -190,15 +196,10 @@ app.post('/back', async (req, res) => {
     try {
         const s = await getSession(sid);
         await s.page.goBack({ waitUntil: 'domcontentloaded', timeout: 15000 });
-        await new Promise(r => setTimeout(r, 800));
+        await smartWait(s.page, 1500);
         s.url = s.page.url();
         const img = await snap(s.page);
-        res.set({
-            'Content-Type': 'image/jpeg',
-            'X-Page-Url': encodeURIComponent(s.url),
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Expose-Headers': 'X-Page-Url'
-        });
+        res.set({ 'Content-Type': 'image/jpeg', 'X-Page-Url': encodeURIComponent(s.url), 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Page-Url' });
         res.send(img);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -208,17 +209,12 @@ app.post('/forward', async (req, res) => {
     try {
         const s = await getSession(sid);
         await s.page.goForward({ waitUntil: 'domcontentloaded', timeout: 15000 });
-        await new Promise(r => setTimeout(r, 800));
+        await smartWait(s.page, 1500);
         s.url = s.page.url();
         const img = await snap(s.page);
-        res.set({
-            'Content-Type': 'image/jpeg',
-            'X-Page-Url': encodeURIComponent(s.url),
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Expose-Headers': 'X-Page-Url'
-        });
+        res.set({ 'Content-Type': 'image/jpeg', 'X-Page-Url': encodeURIComponent(s.url), 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Page-Url' });
         res.send(img);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`Copia Autenticada API v3.1 porta ${PORT}`));
+app.listen(PORT, () => console.log(`Copia Autenticada API v3.2 porta ${PORT}`));
