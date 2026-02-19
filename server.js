@@ -19,7 +19,12 @@ async function launchBrowser() {
             '--disable-dev-shm-usage', '--disable-gpu',
             '--no-first-run', '--no-zygote', '--single-process',
             '--disable-features=VizDisplayCompositor',
-            '--disable-blink-features=AutomationControlled'
+            '--disable-blink-features=AutomationControlled',
+            '--memory-pressure-off',
+            '--js-flags=--max-old-space-size=256',
+            '--aggressive-cache-discard',
+            '--disable-cache',
+            '--disable-extensions'
         ]
     });
 }
@@ -67,7 +72,7 @@ async function smartWait(page, ms = 3000) {
     } catch { await new Promise(r => setTimeout(r, 500)); }
 }
 
-app.get('/', (req, res) => res.json({ status: 'ok', version: '3.2', sessions: sessions.size }));
+app.get('/', (req, res) => res.json({ status: 'ok', version: '3.3', sessions: sessions.size }));
 
 app.get('/navigate', async (req, res) => {
     const { sid = 'default', url } = req.query;
@@ -77,13 +82,20 @@ app.get('/navigate', async (req, res) => {
         resetTimer(sid);
         let navUrl = url;
         if (!navUrl.startsWith('http')) navUrl = 'https://' + navUrl;
+
+        const isHeavyApp = /whatsapp|gmail|outlook|teams|slack/i.test(navUrl);
+
         try {
-            await s.page.goto(navUrl, { waitUntil: 'networkidle2', timeout: 25000 });
+            await s.page.goto(navUrl, {
+                waitUntil: isHeavyApp ? 'domcontentloaded' : 'networkidle2',
+                timeout: 30000
+            });
         } catch {
-            await s.page.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-            await smartWait(s.page, 3000);
+            console.log('navigate timeout, tirando screenshot do estado atual');
         }
-        await smartWait(s.page, 2000);
+
+        await smartWait(s.page, isHeavyApp ? 5000 : 2000);
+
         s.url = s.page.url();
         const title = await s.page.title().catch(() => '');
         const img   = await snap(s.page);
@@ -217,4 +229,4 @@ app.post('/forward', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`Copia Autenticada API v3.2 porta ${PORT}`));
+app.listen(PORT, () => console.log(`Copia Autenticada API v3.3 porta ${PORT}`));
