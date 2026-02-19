@@ -55,7 +55,7 @@ async function snap(page) {
 }
 
 app.get('/', (req, res) => {
-    res.json({ status: 'ok', version: '3.0', sessions: sessions.size });
+    res.json({ status: 'ok', version: '3.1', sessions: sessions.size });
 });
 
 app.get('/navigate', async (req, res) => {
@@ -144,6 +144,47 @@ app.post('/scroll', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.post('/type', async (req, res) => {
+    const { sid = 'default', text = '' } = req.body;
+    try {
+        const s = await getSession(sid);
+        resetTimer(sid);
+        await s.page.keyboard.type(text, { delay: 50 });
+        await new Promise(r => setTimeout(r, 800));
+        const img = await snap(s.page);
+        res.set({ 'Content-Type': 'image/jpeg', 'Access-Control-Allow-Origin': '*' });
+        res.send(img);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/key', async (req, res) => {
+    const { sid = 'default', key = 'Enter' } = req.body;
+    try {
+        const s = await getSession(sid);
+        resetTimer(sid);
+        if (key.includes('+')) {
+            const parts = key.split('+');
+            const mod   = parts[0];
+            const k     = parts[1];
+            await s.page.keyboard.down(mod);
+            await s.page.keyboard.press(k);
+            await s.page.keyboard.up(mod);
+        } else {
+            await s.page.keyboard.press(key);
+        }
+        await new Promise(r => setTimeout(r, 1200));
+        s.url = s.page.url();
+        const img = await snap(s.page);
+        res.set({
+            'Content-Type': 'image/jpeg',
+            'X-Page-Url': encodeURIComponent(s.url),
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Expose-Headers': 'X-Page-Url'
+        });
+        res.send(img);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/back', async (req, res) => {
     const { sid = 'default' } = req.body;
     try {
@@ -180,4 +221,4 @@ app.post('/forward', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`Copia Autenticada API v3.0 porta ${PORT}`));
+app.listen(PORT, () => console.log(`Copia Autenticada API v3.1 porta ${PORT}`));
