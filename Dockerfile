@@ -1,12 +1,9 @@
-FROM node:20-slim
+FROM mcr.microsoft.com/playwright:v1.41.0-jammy
 
 WORKDIR /app
 
 COPY package*.json ./
 RUN npm install --production
-
-# Instala WebKit E todas as dependências do sistema automaticamente
-RUN npx playwright install --with-deps webkit
 
 COPY . .
 
